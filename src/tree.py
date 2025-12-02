@@ -13,7 +13,11 @@ SEPARATOR_WIDTH = 6  # Width of the gap between tree and lyrics
 
 # The total number of lines the tree structure occupies (Star + Branches + Trunk)
 TOTAL_TREE_BODY_LINES = 1 + (HEIGHT // 2) + 3
-MAX_LYRIC_LINES = 15  # The total number of lines to display lyrics on screen
+
+# 內容總行數：頂部邊框(1) + 標題行(1) + 歌詞行數(MAX_LYRIC_LINES) + 底部邊框(1)
+# 總共佔用樹的 TOTAL_TREE_BODY_LINES 行
+# 確保總行數計算正確：MAX_LYRIC_LINES = TOTAL_TREE_BODY_LINES - 3 (減去頂部邊框、標題行、底部邊框)
+MAX_LYRIC_LINES = TOTAL_TREE_BODY_LINES - 3 # 14 - 3 = 11 行歌詞
 
 # Colors (ANSI escape codes)
 GREEN = "\033[92m"
@@ -102,17 +106,23 @@ LYRICS_CONTENT_WIDTH = LYRICS_FRAME_WIDTH - 2
 
 
 def _get_tree_line_content(line_idx: int) -> str:
-    """Generates the tree content (Star, Branch, or Trunk) for a given line index."""
+    """
+    Generates the tree content (Star, Branch, or Trunk) for a given line index.
+    Ensures the *visible* output width is always exactly WIDTH for stable alignment.
+    """
 
-    # 0: Star
+    # 0: Star (for the top-border line)
     if line_idx == 0:
-        return " " * ((WIDTH // 2) - 1) + YELLOW + "★" + RESET
+        content = YELLOW + "★" + RESET
+        content_width = len(strip_ansi(content))
+        # 置中星號並填充到 WIDTH 寬度
+        padding_left = (WIDTH - content_width) // 2
+        padding_right = WIDTH - content_width - padding_left
+        return " " * padding_left + content + " " * padding_right
 
-    # 1 to TOTAL_TREE_BODY_LINES - 4: Branches
+    # 1 to TOTAL_TREE_BODY_LINES - 4: Branches (for title line, lyric lines)
     elif line_idx >= 1 and line_idx <= TOTAL_TREE_BODY_LINES - 4:
-        # i is the effective height index starting from 1
         i = (line_idx - 1) * 2 + 1
-
         branch_width = min(i, WIDTH)
         branch = ""
         for _ in range(branch_width):
@@ -120,34 +130,33 @@ def _get_tree_line_content(line_idx: int) -> str:
                 branch += random.choice(ALL_COLORS) + "●" + GREEN
             else:
                 branch += "▲"
+        
+        content_width = branch_width
+        padding_left = (WIDTH - content_width) // 2
+        padding_right = WIDTH - content_width - padding_left
+        return " " * padding_left + GREEN + branch + RESET + " " * padding_right
 
-        return " " * ((WIDTH - branch_width) // 2) + GREEN + branch + RESET
-
-    # TOTAL_TREE_BODY_LINES - 3 to TOTAL_TREE_BODY_LINES - 1: Trunk
+    # TOTAL_TREE_BODY_LINES - 3 to TOTAL_TREE_BODY_LINES - 1: Trunk (for lyric and bottom border lines)
     elif line_idx >= TOTAL_TREE_BODY_LINES - 3 and line_idx < TOTAL_TREE_BODY_LINES:
         trunk_width = HEIGHT // 4
-        return " " * ((WIDTH - trunk_width) // 2) + WHITE + "█" * trunk_width + RESET
+        content = WHITE + "█" * trunk_width + RESET
+        content_width = trunk_width
+        
+        padding_left = (WIDTH - content_width) // 2
+        padding_right = WIDTH - content_width - padding_left
+        return " " * padding_left + content + " " * padding_right
 
-    return ""
+    return " " * WIDTH # Fallback to full width space
 
 
-def _format_lyric_line(lyric: str) -> str:
-    """Centers and pads a single lyric line to the content width."""
-    lyric_width = len(strip_ansi(lyric))
-    if lyric_width < LYRICS_CONTENT_WIDTH:
-        padding_left = (LYRICS_CONTENT_WIDTH - lyric_width) // 2
-        padding_right = LYRICS_CONTENT_WIDTH - lyric_width - padding_left
-        # Use strip_ansi to separate content from color codes before padding
-        centered_lyric = " " * padding_left + lyric + " " * padding_right
-    else:
-        centered_lyric = lyric[:LYRICS_CONTENT_WIDTH]
-
-    # Ensure final string has correct visible width (e.g., if color codes were stripped)
-    final_content = strip_ansi(centered_lyric)
-    if len(final_content) < LYRICS_CONTENT_WIDTH:
-        centered_lyric += " " * (LYRICS_CONTENT_WIDTH - len(final_content))
-
-    return centered_lyric
+def _format_content_line(text: str, target_color: str) -> str:
+    """Centers text to the content width and applies color."""
+    
+    visible_content = strip_ansi(text)
+    padded_content = visible_content.center(LYRICS_CONTENT_WIDTH)
+    
+    # 應用目標顏色代碼，並用 RESET 包住
+    return f"{target_color}{padded_content}{RESET}"
 
 
 def draw_tree(current_lyrics_list: List[str]):
@@ -156,66 +165,74 @@ def draw_tree(current_lyrics_list: List[str]):
     os.system("cls" if os.name == "nt" else "clear")
     print()
 
-    # --- 1. Prepare Lyrics Content ---
-    formatted_title_text = f"《{SONG_TITLE}》 - {ARTIST}"
-    # Title line is always YELLOW and centered
-    title_line_content = YELLOW + _format_lyric_line(formatted_title_text) + RESET
+    # --- 1. Prepare Content ---
+    
+    # 標題行 (不捲動)
+    formatted_title_text = f"{SONG_TITLE} - {ARTIST}"
+    title_content_with_color = _format_content_line(formatted_title_text, YELLOW)
 
-    # Format and pad scrolling lyrics lines (always WHITE)
-    white_lyrics = [WHITE + lyric + RESET for lyric in current_lyrics_list]
+    # 歌詞行 (捲動)
+    white_lyrics_content = [
+        _format_content_line(lyric, WHITE) for lyric in current_lyrics_list
+    ]
     
-    available_content_lines = TOTAL_TREE_BODY_LINES - 2
-    available_lyric_lines = available_content_lines - 1
-    
-    # Pad lyrics to fill remaining lines (excluding title line)
-    empty_content_line = " " * LYRICS_CONTENT_WIDTH
+    # 填充空行
+    empty_content_line = _format_content_line("", WHITE) 
     padded_lyrics_content = (
-        [empty_content_line] * (available_lyric_lines - len(white_lyrics))
-    ) + [_format_lyric_line(l) for l in white_lyrics]
-
-    # Combine title and lyrics content
-    all_content_lines = [title_line_content] + padded_lyrics_content
-
-    # --- 2. Draw Top Border ---
-    top_tree_line = _get_tree_line_content(0)
-    top_tree_visible_width = len(strip_ansi(top_tree_line))
+        [empty_content_line] * (MAX_LYRIC_LINES - len(white_lyrics_content))
+    ) + white_lyrics_content
     
-    # 修正凸出問題: 使用 WIDTH 來確保左邊界對齊
-    # 填充 = 樹的最大寬度 + 分隔符寬度 - 該行樹的實際寬度
-    top_padding = " " * (WIDTH + SEPARATOR_WIDTH - top_tree_visible_width)
+    # 樹的行索引計數器 (從 0 開始)
+    tree_line_counter = 0
+
+
+    # --- 2. Draw Top Border (Tree Line 0) ---
+    top_tree_line = _get_tree_line_content(tree_line_counter)
+    top_padding = " " * SEPARATOR_WIDTH
     
-    top_border = BOX_TOP_LEFT + BOX_HORIZONTAL * LYRICS_CONTENT_WIDTH + BOX_TOP_RIGHT
-    # 邊框顏色改為 CYAN
+    top_horizontal_bar_count = LYRICS_CONTENT_WIDTH
+    top_border = BOX_TOP_LEFT + BOX_HORIZONTAL * top_horizontal_bar_count + BOX_TOP_RIGHT
+    
     print(f"{top_tree_line}{top_padding}{CYAN}{top_border}{RESET}")
+    tree_line_counter += 1
 
-    # --- 3. Draw Content Lines ---
-    for content_idx in range(available_content_lines):
-        tree_line_idx = content_idx + 1
-        tree_line_content = _get_tree_line_content(tree_line_idx)
-        tree_line_visible_width = len(strip_ansi(tree_line_content))
 
-        # 修正凸出問題: 使用 WIDTH 來確保左邊界對齊
-        padding = " " * (WIDTH + SEPARATOR_WIDTH - tree_line_visible_width)
-        
-        content_line = all_content_lines[content_idx]
-        
-        # 邊框顏色改為 CYAN，確保顏色代碼只包圍邊界字符
-        frame_line = f"{CYAN}{BOX_VERTICAL}{RESET}{content_line}{CYAN}{BOX_VERTICAL}{RESET}"
-        print(f"{tree_line_content}{padding}{frame_line}")
-
-    # --- 4. Draw Bottom Border ---
-    bottom_tree_line_idx = TOTAL_TREE_BODY_LINES - 1
-    bottom_tree_line = _get_tree_line_content(bottom_tree_line_idx)
-    bottom_tree_visible_width = len(strip_ansi(bottom_tree_line))
-
-    # 修正凸出問題: 使用 WIDTH 來確保左邊界對齊
-    bottom_padding = " " * (WIDTH + SEPARATOR_WIDTH - bottom_tree_visible_width)
+    # --- 3. Draw Title Row (Tree Line 1) ---
+    title_tree_line = _get_tree_line_content(tree_line_counter)
+    title_padding = " " * SEPARATOR_WIDTH
     
-    bottom_border = BOX_BOTTOM_LEFT + BOX_HORIZONTAL * LYRICS_CONTENT_WIDTH + BOX_BOTTOM_RIGHT
-    # 邊框顏色改為 CYAN
+    # 構造標題行的邊框
+    title_frame_line = f"{CYAN}{BOX_VERTICAL}{RESET}{title_content_with_color}{CYAN}{BOX_VERTICAL}{RESET}"
+    
+    print(f"{title_tree_line}{title_padding}{title_frame_line}")
+    tree_line_counter += 1
+
+
+    # --- 4. Draw Lyric Content Rows (Tree Lines 2 to 2 + MAX_LYRIC_LINES - 1) ---
+    
+    for lyric_content in padded_lyrics_content:
+        lyric_tree_line = _get_tree_line_content(tree_line_counter)
+        lyric_padding = " " * SEPARATOR_WIDTH
+        
+        # 構造歌詞行的邊框
+        lyric_frame_line = f"{CYAN}{BOX_VERTICAL}{RESET}{lyric_content}{CYAN}{BOX_VERTICAL}{RESET}"
+        
+        print(f"{lyric_tree_line}{lyric_padding}{lyric_frame_line}")
+        tree_line_counter += 1
+
+
+    # --- 5. Draw Bottom Border (Tree Line TOTAL_TREE_BODY_LINES - 1) ---
+    
+    # 確保我們使用樹的最後一行
+    bottom_tree_line = _get_tree_line_content(TOTAL_TREE_BODY_LINES - 1)
+    bottom_padding = " " * SEPARATOR_WIDTH
+    
+    bottom_horizontal_bar_count = LYRICS_CONTENT_WIDTH
+    bottom_border = BOX_BOTTOM_LEFT + BOX_HORIZONTAL * bottom_horizontal_bar_count + BOX_BOTTOM_RIGHT
+    
     print(f"{bottom_tree_line}{bottom_padding}{CYAN}{bottom_border}{RESET}")
 
-    # 5. Draw Message
+    # 6. Draw Message
     message_line_content = (
         "\n" + " " * ((WIDTH - 15) // 2) + RED + "Merry Christmas!" + RESET
     )
@@ -223,7 +240,7 @@ def draw_tree(current_lyrics_list: List[str]):
     print()
 
 
-# --- Main Animation Loop (Unchanged) ---
+# --- Main Animation Loop (MAX_LYRIC_LINES has been redefined) ---
 
 
 def animate():
@@ -233,16 +250,15 @@ def animate():
         print(
             "Running tree animation only (no synchronized lyrics) due to LRC file error."
         )
-        available_content_lines = TOTAL_TREE_BODY_LINES - 2
-        max_lyrics_lines = available_content_lines - 1
+        max_lyrics_lines = MAX_LYRIC_LINES
         while True:
             draw_tree([""] * max_lyrics_lines)
             time.sleep(0.1)
 
     start_time = time.time()
     next_lyric_index = 0
-    available_content_lines = TOTAL_TREE_BODY_LINES - 2
-    max_lyrics_lines = available_content_lines - 1
+    max_lyrics_lines = MAX_LYRIC_LINES
+    # Start with fewer blank lines so first lyric appears earlier
     visible_lyrics: List[str] = [""] * max(0, max_lyrics_lines - 3)
 
     try:
